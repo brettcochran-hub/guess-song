@@ -533,6 +533,7 @@ function extractPlaylistId(url) {
 
 async function fetchTracks(token, pid) {
   const list = [];
+  let total = 0;
   let url = `https://api.spotify.com/v1/playlists/${pid}/tracks?limit=100` +
             `&fields=next,items(track(name,artists,album(name,images),preview_url))`;
   while (url) {
@@ -546,7 +547,9 @@ async function fetchTracks(token, pid) {
     const data = await res.json();
     for (const item of (data.items || [])) {
       const t = item?.track;
-      if (t?.preview_url) {
+      if (!t) continue;
+      total++;
+      if (t.preview_url) {
         list.push({
           name:       t.name,
           artist:     t.artists.map(a => a.name).join(', '),
@@ -557,6 +560,7 @@ async function fetchTracks(token, pid) {
     }
     url = data.next;
   }
+  list._total = total;
   return list;
 }
 
@@ -614,9 +618,15 @@ async function startGame() {
       }
     }
 
-    if (raw.length === 0) throw new Error(
-      'No playable preview clips found. Try a different playlist — popular mainstream playlists work best.'
-    );
+    if (raw.length === 0) {
+      const found = raw._total || 0;
+      const detail = found > 0
+        ? `Found ${found} songs but none had playable 30-second previews.`
+        : 'No songs found in this playlist.';
+      throw new Error(
+        `${detail} Spotify has removed preview clips from many playlists (especially their own curated ones). Try a user-created playlist with mainstream popular songs.`
+      );
+    }
 
     localStorage.setItem('gts_purl', purl);
     tracks     = shuffle(raw);
