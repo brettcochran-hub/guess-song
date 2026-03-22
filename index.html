@@ -457,7 +457,7 @@ async function connectSpotify() {
     scope:                 SCOPES,
     code_challenge_method: 'S256',
     code_challenge:        challenge,
-    show_dialog:           'false',
+    show_dialog:           'true',
   });
 
   location.href = 'https://accounts.spotify.com/authorize?' + params;
@@ -613,9 +613,10 @@ async function startGame() {
         // authenticated account hasn't been added as a test user.
         show('screen-setup');
         showSetupErr(
-          'Spotify blocked access to this playlist (403 Forbidden). ' +
-          'Your Spotify app is likely in Development Mode — go to your Spotify Developer Dashboard, ' +
-          'open the app → User Management, and add your Spotify account email as a test user.'
+          'Spotify blocked access (403 Forbidden)' +
+          (fetchErr.message ? ': ' + fetchErr.message : '.') +
+          ' Check that the email shown in "✓ Connected as …" above is added as a test user ' +
+          'in your Spotify Developer Dashboard → User Management.'
         );
         return;
       } else {
@@ -837,6 +838,21 @@ function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ─── Show which Spotify account is connected ──────────────────────────────────
+async function showConnectedAccount(token) {
+  try {
+    const res = await fetch('https://api.spotify.com/v1/me', {
+      headers: { Authorization: 'Bearer ' + token }
+    });
+    if (!res.ok) return;
+    const me = await res.json();
+    const label = me.email || me.display_name || me.id || '';
+    if (label) {
+      document.querySelector('.connected-badge').textContent = '✓ Connected as ' + label;
+    }
+  } catch (_) {}
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 (async function init() {
   // Always show the correct redirect URI on the auth screen
@@ -874,8 +890,9 @@ function escHtml(s) {
     show('screen-loading');
     setLoad('Completing Spotify login…');
     try {
-      await exchangeCode(code);
+      const tok = await exchangeCode(code);
       show('screen-setup');
+      showConnectedAccount(tok);
     } catch(e) {
       showAuthErr(e.message);
       show('screen-auth');
@@ -887,6 +904,7 @@ function escHtml(s) {
   const token = await getValidToken();
   if (token) {
     show('screen-setup');
+    showConnectedAccount(token);
   } else {
     show('screen-auth');
   }
