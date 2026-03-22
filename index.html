@@ -608,10 +608,15 @@ async function startGame() {
         }
         raw = await fetchTracks(token, pid);
       } else if (fetchErr.status === 403) {
-        // Forbidden — credentials are no longer valid; clear and re-auth
-        ['gts_token', 'gts_refresh', 'gts_expiry'].forEach(k => localStorage.removeItem(k));
-        show('screen-auth');
-        showAuthErr('Spotify access was denied. Please reconnect and re-authorize the app.');
+        // Forbidden — token is valid but Spotify is blocking playlist access.
+        // Most likely cause: Spotify app is in Development Mode and the
+        // authenticated account hasn't been added as a test user.
+        show('screen-setup');
+        showSetupErr(
+          'Spotify blocked access to this playlist (403 Forbidden). ' +
+          'Your Spotify app is likely in Development Mode — go to your Spotify Developer Dashboard, ' +
+          'open the app → User Management, and add your Spotify account email as a test user.'
+        );
         return;
       } else {
         throw fetchErr;
