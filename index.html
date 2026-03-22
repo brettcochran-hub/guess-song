@@ -457,7 +457,7 @@ async function connectSpotify() {
     scope:                 SCOPES,
     code_challenge_method: 'S256',
     code_challenge:        challenge,
-    show_dialog:           'false',
+    show_dialog:           'true',
   });
 
   location.href = 'https://accounts.spotify.com/authorize?' + params;
@@ -533,18 +533,23 @@ function extractPlaylistId(url) {
 
 async function fetchTracks(token, pid) {
   const list = [];
+  let total = 0;
   let url = `https://api.spotify.com/v1/playlists/${pid}/tracks?limit=100` +
             `&fields=next,items(track(name,artists,album(name,images),preview_url))`;
   while (url) {
     const res = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
     if (!res.ok) {
       const e = await res.json().catch(() => ({}));
-      throw new Error(e.error?.message || 'Could not load playlist. Make sure the playlist exists and is accessible.');
+      const err = new Error(e.error?.message || 'Could not load playlist. Make sure the playlist exists and is accessible.');
+      err.status = res.status;
+      throw err;
     }
     const data = await res.json();
     for (const item of (data.items || [])) {
       const t = item?.track;
-      if (t?.preview_url) {
+      if (!t) continue;
+      total++;
+      if (t.preview_url) {
         list.push({
           name:       t.name,
           artist:     t.artists.map(a => a.name).join(', '),
@@ -555,6 +560,7 @@ async function fetchTracks(token, pid) {
     }
     url = data.next;
   }
+  list._total = total;
   return list;
 }
 
@@ -584,15 +590,49 @@ async function startGame() {
   setLoad('Getting your playlist…');
 
   try {
-    const token = await getValidToken();
+    let token = await getValidToken();
     if (!token) { show('screen-auth'); return; }
 
     const pid = extractPlaylistId(purl);
-    const raw = await fetchTracks(token, pid);
+    let raw;
+    try {
+      raw = await fetchTracks(token, pid);
+    } catch (fetchErr) {
+      if (fetchErr.status === 401) {
+        // Token rejected by Spotify — force a refresh and retry once
+        token = await refreshToken();
+        if (!token) {
+          show('screen-auth');
+          showAuthErr('Your Spotify session expired. Please reconnect.');
+          return;
+        }
+        raw = await fetchTracks(token, pid);
+      } else if (fetchErr.status === 403) {
+        // Forbidden — token is valid but Spotify is blocking playlist access.
+        // Most likely cause: Spotify app is in Development Mode and the
+        // authenticated account hasn't been added as a test user.
+        show('screen-setup');
+        showSetupErr(
+          'Spotify blocked access (403 Forbidden)' +
+          (fetchErr.message ? ': ' + fetchErr.message : '.') +
+          ' Check that the email shown in "✓ Connected as …" above is added as a test user ' +
+          'in your Spotify Developer Dashboard → User Management.'
+        );
+        return;
+      } else {
+        throw fetchErr;
+      }
+    }
 
-    if (raw.length === 0) throw new Error(
-      'No playable preview clips found. Try a different playlist — popular mainstream playlists work best.'
-    );
+    if (raw.length === 0) {
+      const found = raw._total || 0;
+      const detail = found > 0
+        ? `Found ${found} songs but none had playable 30-second previews.`
+        : 'No songs found in this playlist.';
+      throw new Error(
+        `${detail} Spotify has removed preview clips from many playlists (especially their own curated ones). Try a user-created playlist with mainstream popular songs.`
+      );
+    }
 
     localStorage.setItem('gts_purl', purl);
     tracks     = shuffle(raw);
@@ -798,6 +838,21 @@ function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ─── Show which Spotify account is connected ──────────────────────────────────
+async function showConnectedAccount(token) {
+  try {
+    const res = await fetch('https://api.spotify.com/v1/me', {
+      headers: { Authorization: 'Bearer ' + token }
+    });
+    if (!res.ok) return;
+    const me = await res.json();
+    const label = me.email || me.display_name || me.id || '';
+    if (label) {
+      document.querySelector('.connected-badge').textContent = '✓ Connected as ' + label;
+    }
+  } catch (_) {}
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 (async function init() {
   // Always show the correct redirect URI on the auth screen
@@ -835,8 +890,9 @@ function escHtml(s) {
     show('screen-loading');
     setLoad('Completing Spotify login…');
     try {
-      await exchangeCode(code);
+      const tok = await exchangeCode(code);
       show('screen-setup');
+      showConnectedAccount(tok);
     } catch(e) {
       showAuthErr(e.message);
       show('screen-auth');
@@ -848,6 +904,7 @@ function escHtml(s) {
   const token = await getValidToken();
   if (token) {
     show('screen-setup');
+    showConnectedAccount(token);
   } else {
     show('screen-auth');
   }
